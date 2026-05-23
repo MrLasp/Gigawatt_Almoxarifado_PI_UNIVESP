@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gigawatt — Almoxarifado</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f5f3; color: #1a1a18; min-height: 100vh; }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 0.5px solid #ccc; border-radius: 8px; font-size: 13px; font-family: inherit; background: #fff; color: #1a1a18; outline: none; }
+  input:focus, select:focus { border-color: #888; box-shadow: 0 0 0 2px rgba(0,0,0,0.08); }
+  button { font-family: inherit; cursor: pointer; border: 0.5px solid #ccc; border-radius: 8px; background: #fff; color: #1a1a18; padding: 6px 14px; font-size: 13px; transition: background 0.15s; }
+  button:hover { background: #f0f0ee; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f5f3;
+    --bg-tertiary: #efefed;
+    --bg-success: #eaf3de;
+    --bg-danger: #fcebeb;
+    --bg-warning: #faeeda;
+    --bg-info: #e6f1fb;
+    --text-primary: #1a1a18;
+    --text-secondary: #5f5e5a;
+    --text-success: #3b6d11;
+    --text-danger: #a32d2d;
+    --text-warning: #854f0b;
+    --text-info: #185fa5;
+    --border: #d3d1c7;
+    --border-success: #97c459;
+    --border-danger: #f09595;
+    --border-warning: #ef9f27;
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const SUPA_URL = "https://zqribwcfwanyydiuozei.supabase.co/rest/v1";
+const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpxcmlid2Nmd2FueXlkaXVvemVpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1NDA3ODksImV4cCI6MjA5NTExNjc4OX0.Kaz-el0hwdt4GmmZi8o7JYjyNKihqfw-BhWH9btS18c";
+
+const hdrs = {
+  "Content-Type": "application/json",
+  "apikey": SUPA_KEY,
+  "Authorization": `Bearer ${SUPA_KEY}`,
+  "Prefer": "return=representation"
+};
+
+async function sb(path, opts = {}) {
+  const res = await fetch(`${SUPA_URL}${path}`, { headers: hdrs, ...opts });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || res.statusText); }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+const api = {
+  get: (t, qs="") => sb(`/${t}?order=created_at.desc${qs}`),
+  post: (t, b) => sb(`/${t}`, { method:"POST", body: JSON.stringify(b) }),
+  patch: (t, id, b) => sb(`/${t}?id=eq.${id}`, { method:"PATCH", body: JSON.stringify(b) }),
+  del: (t, id) => sb(`/${t}?id=eq.${id}`, { method:"DELETE" }),
+};
+
+const TABS = ["Dashboard","Materiais","Funcionários","Ordens de Serviço","Movimentações","Histórico"];
+const ICONS = { Dashboard:"ti-dashboard", Materiais:"ti-package", "Funcionários":"ti-users", "Ordens de Serviço":"ti-clipboard-list", "Movimentações":"ti-arrows-exchange", "Histórico":"ti-history" };
+
+function Toast({ msg, type }) {
+  if (!msg) return null;
+  return (
+    <div style={{ position:"fixed", bottom:24, right:24, zIndex:100, padding:"10px 18px", borderRadius:12, fontSize:13, fontWeight:500,
+      background: type==="error" ? "var(--bg-danger)" : "var(--bg-success)",
+      color: type==="error" ? "var(--text-danger)" : "var(--text-success)",
+      border: `0.5px solid ${type==="error" ? "var(--border-danger)" : "var(--border-success)"}` }}>
+      <i className={`ti ${type==="error" ? "ti-alert-circle" : "ti-check"}`} style={{ marginRight:8 }} />
+      {msg}
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState("Dashboard");
+  const [mats, setMats] = useState([]);
+  const [funcs, setFuncs] = useState([]);
+  const [ordens, setOrdens] = useState([]);
+  const [movs, setMovs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState({ msg:"", type:"success" });
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const showToast = (msg, type="success") => { setToast({ msg, type }); setTimeout(() => setToast({ msg:"", type:"success" }), 3000); };
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [m, f, o, mv] = await Promise.all([
+        api.get("materiais"),
+        api.get("funcionarios"),
+        api.get("ordens_servico"),
+        api.get("movimentacoes", "&select=*,materiais(descricao),funcionarios(nome),ordens_servico(numero)&order=created_at.desc&limit=100"),
+      ]);
+      setMats(m||[]); setFuncs(f||[]); setOrdens(o||[]); setMovs(mv||[]);
+    } catch(e) { showToast("Erro ao conectar: " + e.message, "error"); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const baixo = mats.filter(m => m.qtd <= 5);
+
+  return (
+    <div style={{ fontFamily:"system-ui,sans-serif", minHeight:"100vh", background:"var(--bg-secondary)" }}>
+      <h2 className="sr-only">Sistema de Gestão de Almoxarifado — Gigawatt</h2>
+      <Toast msg={toast.msg} type={toast.type} />
+
+      <div style={{ background:"var(--bg-primary)", borderBottom:"0.5px solid var(--border)", padding:"0 1.25rem", display:"flex", alignItems:"center", justifyContent:"space-between", height:52 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <i className="ti ti-bolt" style={{ fontSize:20, color:"#E89A00" }} />
+          <span style={{ fontWeight:500, fontSize:15 }}>Gigawatt — Almoxarifado</span>
+          <span style={{ fontSize:11, padding:"2px 8px", borderRadius:6, background:"var(--bg-success)", color:"var(--text-success)" }}>Supabase</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <button onClick={loadAll} style={{ border:"none", background:"none", fontSize:18, padding:4, color:"var(--text-secondary)" }} aria-label="Recarregar"><i className="ti ti-refresh" /></button>
+          <button onClick={() => setMenuOpen(o => !o)} style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, padding:"6px 10px" }}>
+            <i className="ti ti-menu-2" style={{ fontSize:16 }} />{tab}
+          </button>
+        </div>
+      </div>
+
+      {menuOpen && (
+        <div style={{ position:"absolute", right:12, top:58, background:"var(--bg-primary)", border:"0.5px solid var(--border)", borderRadius:12, zIndex:50, minWidth:200, overflow:"hidden" }}>
+          {TABS.map(t => (
+            <button key={t} onClick={() => { setTab(t); setMenuOpen(false); }}
+              style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"10px 16px", background: t===tab ? "var(--bg-secondary)" : "transparent", border:"none", borderRadius:0, fontSize:14, textAlign:"left" }}>
+              <i className={`ti ${ICONS[t]}`} style={{ fontSize:16 }} />{t}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div style={{ background:"var(--bg-primary)", borderBottom:"0.5px solid var(--border)", padding:"0 1.25rem", display:"flex", gap:4, overflowX:"auto" }}>
+        {TABS.map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{ padding:"10px 14px", border:"none", borderBottom: t===tab ? "2px solid #E89A00" : "2px solid transparent", borderRadius:0, background:"transparent", fontSize:13, color: t===tab ? "var(--text-primary)" : "var(--text-secondary)", fontWeight: t===tab ? 500 : 400, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:6 }}>
+            <i className={`ti ${ICONS[t]}`} style={{ fontSize:15 }} />{t}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding:"1.25rem", maxWidth:960, margin:"0 auto" }}>
+        {loading ? (
+          <div style={{ textAlign:"center", padding:"3rem", color:"var(--text-secondary)" }}>
+            <i className="ti ti-loader" style={{ fontSize:28, display:"block", marginBottom:8 }} />
+            <span style={{ fontSize:14 }}>Carregando dados do banco...</span>
+          </div>
+        ) : (
+          <>
+            {tab==="Dashboard" && <Dashboard mats={mats} funcs={funcs} movs={movs} ordens={ordens} baixo={baixo} setTab={setTab} />}
+            {tab==="Materiais" && <Materiais mats={mats} reload={loadAll} showToast={showToast} />}
+            {tab==="Funcionários" && <Funcionarios funcs={funcs} reload={loadAll} showToast={showToast} />}
+            {tab==="Ordens de Serviço" && <OrdensServico ordens={ordens} reload={loadAll} showToast={showToast} />}
+            {tab==="Movimentações" && <Movimentacoes mats={mats} funcs={funcs} ordens={ordens} reload={loadAll} showToast={showToast} />}
+            {tab==="Histórico" && <Historico movs={movs} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ mats, funcs, movs, ordens, baixo, setTab }) {
+  const retiradas = movs.filter(m => m.tipo==="Retirada").length;
+  const devolucoes = movs.filter(m => m.tipo==="Devolução").length;
+  return (
+    <div>
+      <p style={{ fontSize:13, color:"var(--text-secondary)", marginBottom:"1rem" }}>Visão geral do almoxarifado</p>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12, marginBottom:"1.25rem" }}>
+        {[["Materiais",mats.length,"ti-package"],["Funcionários",funcs.length,"ti-users"],["Ordens de serviço",ordens.length,"ti-clipboard-list"],["Retiradas",retiradas,"ti-arrow-up-right"],["Devoluções",devolucoes,"ti-arrow-down-left"]].map(([label,val,ic]) => (
+          <div key={label} style={{ background:"var(--bg-tertiary)", borderRadius:8, padding:"1rem" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+              <i className={`ti ${ic}`} style={{ fontSize:16, color:"var(--text-secondary)" }} />
+              <span style={{ fontSize:12, color:"var(--text-secondary)" }}>{label}</span>
+            </div>
+            <span style={{ fontSize:24, fontWeight:500 }}>{val}</span>
+          </div>
+        ))}
+      </div>
+      {baixo.length > 0 && (
+        <div style={{ background:"var(--bg-warning)", border:"0.5px solid var(--border-warning)", borderRadius:12, padding:"1rem 1.25rem", marginBottom:"1.25rem" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <i className="ti ti-alert-triangle" style={{ fontSize:16, color:"var(--text-warning)" }} />
+            <span style={{ fontWeight:500, fontSize:14, color:"var(--text-warning)" }}>Estoque baixo ({baixo.length} item{baixo.length>1?"ns":""})</span>
+          </div>
+          {baixo.map(m => <div key={m.id} style={{ fontSize:13, color:"var(--text-warning)", marginTop:4 }}>{m.descricao} — <strong>{m.qtd} {m.unidade}</strong> (corredor {m.corredor})</div>)}
+        </div>
+      )}
+      <div style={{ background:"var(--bg-primary)", border:"0.5px solid var(--border)", borderRadius:12, padding:"1rem 1.25rem" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+          <span style={{ fontWeight:500, fontSize:14 }}>Últimas movimentações</span>
+          <button onClick={() => setTab("Histórico")} style={{ fontSize:12, color:"var(--text-secondary)", background:"none", border:"none" }}>Ver todas →</button>
+        </div>
+        {movs.slice(0,5).length===0 ? <p style={{ fontSize:13, color:"var(--text-secondary)" }}>Nenhuma movimentação registrada.</p>
+        : movs.slice(0,5).map((m,i) => (
+          <div key={m.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 0", borderTop: i>0 ? "0.5px solid var(--border)" : "none", fontSize:13 }}>
+            <span style={{ padding:"2px 8px", borderRadius:6, fontSize:11, fontWeight:500, background: m.tipo==="Retirada" ? "var(--bg-danger)" : "var(--bg-success)", color: m.tipo==="Retirada" ? "var(--text-danger)" : "var(--text-success)" }}>{m.tipo}</span>
+            <span style={{ flex:1 }}>{m.materiais?.descricao||"—"}</span>
+            <span style={{ color:"var(--text-secondary)" }}>{m.qtd} un</span>
+            <span style={{ color:"var(--text-secondary)", fontSize:12 }}>{m.funcionarios?.nome||"—"}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CrudPage({ title, items, fields, onAdd, onEdit, onDel, renderRow, emptyLabel }) {
+  const empty = Object.fromEntries(fields.map(f => [f.key,""]));
+  const [form, setForm] = useState(empty);
+  const [editing, setEditing] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (fields.filter(f=>f.required!==false).some(f=>!String(form[f.key]).trim())) return;
+    setSaving(true);
+    if (editing) await onEdit({ ...form, id:editing });
+    else await onAdd(form);
+    setSaving(false);
+    setForm(empty); setEditing(null); setShowForm(false);
+  };
+  const startEdit = (item) => { setForm({...item}); setEditing(item.id); setShowForm(true); };
+  const cancel = () => { setForm(empty); setEditing(null); setShowForm(false); };
+  const filtered = items.filter(it => fields.some(f => String(it[f.key]||"").toLowerCase().includes(search.toLowerCase())));
+
+  return (
+    <div>
+      <div style={{ display:"flex", gap:8, marginBottom:"1rem", alignItems:"center" }}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={`Buscar ${title.toLowerCase()}...`} style={{ flex:1, fontSize:13 }} />
+        <button onClick={() => { setShowForm(true); setEditing(null); setForm(empty); }} style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, padding:"6px 12px", whiteSpace:"nowrap" }}>
+          <i className="ti ti-plus" style={{ fontSize:15 }} /> Novo
+        </button>
+      </div>
+      {showForm && (
+        <div style={{ background:"var(--bg-primary)", border:"0.5px solid var(--border)", borderRadius:12, padding:"1rem 1.25rem", marginBottom:"1rem" }}>
+          <p style={{ fontWeight:500, fontSize:14, marginBottom:12 }}>{editing?"Editar":"Novo"} {title.replace(/s$/,"")}</p>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10, marginBottom:12 }}>
+            {fields.map(f => (
+              <div key={f.key}>
+                <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>{f.label}</label>
+                {f.type==="select"
+                  ? <select value={form[f.key]} onChange={e=>setForm(p=>({...p,[f.key]:e.target.value}))} style={{ fontSize:13 }}>
+                      <option value="">Selecione...</option>
+                      {f.options.map(o=><option key={o} value={o}>{o}</option>)}
+                    </select>
+                  : <input type={f.type||"text"} value={form[f.key]} onChange={e=>setForm(p=>({...p,[f.key]:f.type==="number"?Number(e.target.value):e.target.value}))} placeholder={f.placeholder||""} min={f.min} style={{ fontSize:13 }} />
+                }
+              </div>
+            ))}
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={submit} disabled={saving} style={{ fontSize:13, padding:"6px 16px" }}>{saving?"Salvando...":editing?"Salvar":"Adicionar"}</button>
+            <button onClick={cancel} style={{ fontSize:13, padding:"6px 12px" }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      <div style={{ background:"var(--bg-primary)", border:"0.5px solid var(--border)", borderRadius:12, overflow:"hidden" }}>
+        {filtered.length===0
+          ? <p style={{ padding:"1.25rem", fontSize:13, color:"var(--text-secondary)" }}>{emptyLabel}</p>
+          : filtered.map((item,i) => (
+            <div key={item.id} style={{ padding:"10px 1.25rem", borderTop: i>0?"0.5px solid var(--border)":"none", display:"flex", alignItems:"center", gap:10 }}>
+              <div style={{ flex:1 }}>{renderRow(item)}</div>
+              <button onClick={()=>startEdit(item)} style={{ border:"none", background:"none", fontSize:15, padding:4, color:"var(--text-secondary)" }} aria-label="Editar"><i className="ti ti-edit" /></button>
+              <button onClick={()=>onDel(item.id)} style={{ border:"none", background:"none", fontSize:15, padding:4, color:"var(--text-danger)" }} aria-label="Excluir"><i className="ti ti-trash" /></button>
+            </div>
+          ))
+        }
+      </div>
+      <p style={{ fontSize:12, color:"var(--text-secondary)", marginTop:8 }}>{filtered.length} registro{filtered.length!==1?"s":""}</p>
+    </div>
+  );
+}
+
+function Materiais({ mats, reload, showToast }) {
+  const onAdd = async f => { try { await api.post("materiais",{descricao:f.descricao,qtd:Number(f.qtd)||0,unidade:f.unidade,corredor:f.corredor}); showToast("Material adicionado!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  const onEdit = async f => { try { await api.patch("materiais",f.id,{descricao:f.descricao,qtd:Number(f.qtd),unidade:f.unidade,corredor:f.corredor}); showToast("Material atualizado!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  const onDel = async id => { try { await api.del("materiais",id); showToast("Material removido!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  return <CrudPage title="Materiais" items={mats} onAdd={onAdd} onEdit={onEdit} onDel={onDel} emptyLabel="Nenhum material cadastrado."
+    fields={[{key:"descricao",label:"Descrição",required:true},{key:"qtd",label:"Quantidade",type:"number",min:0},{key:"unidade",label:"Unidade",placeholder:"ex: un, metro, kg"},{key:"corredor",label:"Corredor / Localização"}]}
+    renderRow={m=>(
+      <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <i className="ti ti-package" style={{ fontSize:16, color:"var(--text-secondary)" }} />
+        <span style={{ fontSize:14, fontWeight:500, minWidth:160 }}>{m.descricao}</span>
+        <span style={{ fontSize:13, color:"var(--text-secondary)" }}>Corredor: <strong>{m.corredor||"—"}</strong></span>
+        <span style={{ padding:"2px 8px", borderRadius:6, fontSize:12, background:m.qtd<=5?"var(--bg-danger)":"var(--bg-success)", color:m.qtd<=5?"var(--text-danger)":"var(--text-success)", fontWeight:500 }}>{m.qtd} {m.unidade}</span>
+      </div>
+    )} />;
+}
+
+function Funcionarios({ funcs, reload, showToast }) {
+  const cargos = ["Eletricista","Almoxarife","Supervisor","Técnico","Auxiliar","Gerente"];
+  const onAdd = async f => { try { await api.post("funcionarios",{nome:f.nome,cargo:f.cargo}); showToast("Funcionário adicionado!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  const onEdit = async f => { try { await api.patch("funcionarios",f.id,{nome:f.nome,cargo:f.cargo}); showToast("Funcionário atualizado!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  const onDel = async id => { try { await api.del("funcionarios",id); showToast("Funcionário removido!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  return <CrudPage title="Funcionários" items={funcs} onAdd={onAdd} onEdit={onEdit} onDel={onDel} emptyLabel="Nenhum funcionário cadastrado."
+    fields={[{key:"nome",label:"Nome completo",required:true},{key:"cargo",label:"Cargo",type:"select",options:cargos}]}
+    renderRow={f=>(
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ width:34, height:34, borderRadius:"50%", background:"var(--bg-info)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:500, color:"var(--text-info)", flexShrink:0 }}>
+          {f.nome.split(" ").map(n=>n[0]).slice(0,2).join("")}
+        </div>
+        <div>
+          <div style={{ fontSize:14, fontWeight:500 }}>{f.nome}</div>
+          <div style={{ fontSize:12, color:"var(--text-secondary)" }}>{f.cargo}</div>
+        </div>
+      </div>
+    )} />;
+}
+
+function OrdensServico({ ordens, reload, showToast }) {
+  const onAdd = async f => { try { await api.post("ordens_servico",{numero:f.numero,descricao:f.descricao}); showToast("OS adicionada!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  const onEdit = async f => { try { await api.patch("ordens_servico",f.id,{numero:f.numero,descricao:f.descricao}); showToast("OS atualizada!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  const onDel = async id => { try { await api.del("ordens_servico",id); showToast("OS removida!"); reload(); } catch(e){ showToast(e.message,"error"); }};
+  return <CrudPage title="Ordens de Serviço" items={ordens} onAdd={onAdd} onEdit={onEdit} onDel={onDel} emptyLabel="Nenhuma OS cadastrada."
+    fields={[{key:"numero",label:"Número OS",placeholder:"ex: OS-003",required:true},{key:"descricao",label:"Descrição do serviço"}]}
+    renderRow={os=>(
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <i className="ti ti-clipboard-list" style={{ fontSize:16, color:"var(--text-secondary)" }} />
+        <span style={{ fontSize:13, fontWeight:500, background:"var(--bg-secondary)", padding:"2px 8px", borderRadius:6 }}>{os.numero}</span>
+        <span style={{ fontSize:13, color:"var(--text-secondary)" }}>{os.descricao}</span>
+      </div>
+    )} />;
+}
+
+function Movimentacoes({ mats, funcs, ordens, reload, showToast }) {
+  const [form, setForm] = useState({ materialId:"", funcId:"", osId:"", tipo:"Retirada", qtd:1, obs:"" });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const matSel = mats.find(m => m.id===Number(form.materialId));
+
+  const submit = async () => {
+    setErr("");
+    if (!form.materialId||!form.funcId||form.qtd<1) { setErr("Preencha material, funcionário e quantidade."); return; }
+    if (form.tipo==="Retirada"&&matSel&&form.qtd>matSel.qtd) { setErr(`Estoque insuficiente. Disponível: ${matSel.qtd} ${matSel.unidade}.`); return; }
+    setSaving(true);
+    try {
+      await api.post("movimentacoes",{ tipo:form.tipo, qtd:Number(form.qtd), material_id:Number(form.materialId), funcionario_id:Number(form.funcId), ordem_servico_id:form.osId?Number(form.osId):null, obs:form.obs||null });
+      showToast(`${form.tipo} registrada!`);
+      setForm({ materialId:"", funcId:"", osId:"", tipo:"Retirada", qtd:1, obs:"" });
+      reload();
+    } catch(e) { setErr(e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div>
+      <div style={{ background:"var(--bg-primary)", border:"0.5px solid var(--border)", borderRadius:12, padding:"1.25rem", maxWidth:520 }}>
+        <p style={{ fontWeight:500, fontSize:15, marginBottom:"1rem" }}>Registrar movimentação</p>
+        <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+          {["Retirada","Devolução"].map(t=>(
+            <button key={t} onClick={()=>setForm(p=>({...p,tipo:t}))}
+              style={{ flex:1, padding:"8px", fontSize:13, fontWeight:form.tipo===t?500:400,
+                background:form.tipo===t?(t==="Retirada"?"var(--bg-danger)":"var(--bg-success)"):"var(--bg-secondary)",
+                color:form.tipo===t?(t==="Retirada"?"var(--text-danger)":"var(--text-success)"):"var(--text-secondary)",
+                border:form.tipo===t?`1px solid ${t==="Retirada"?"var(--border-danger)":"var(--border-success)"}`:"0.5px solid var(--border)",
+                borderRadius:8 }}>
+              <i className={`ti ${t==="Retirada"?"ti-arrow-up-right":"ti-arrow-down-left"}`} style={{ marginRight:6 }} />{t}
+            </button>
+          ))}
+        </div>
+        {[{label:"Material",key:"materialId",opts:mats.map(m=>({val:m.id,lbl:`${m.descricao} (${m.qtd} ${m.unidade} — ${m.corredor||"s/corredor"})`}))},
+          {label:"Funcionário",key:"funcId",opts:funcs.map(f=>({val:f.id,lbl:`${f.nome} — ${f.cargo}`}))},
+          {label:"Ordem de Serviço (opcional)",key:"osId",opts:ordens.map(o=>({val:o.id,lbl:`${o.numero} — ${o.descricao}`})),optional:true}
+        ].map(({label,key,opts,optional})=>(
+          <div key={key} style={{ marginBottom:12 }}>
+            <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>{label}</label>
+            <select value={form[key]} onChange={e=>setForm(p=>({...p,[key]:e.target.value}))} style={{ fontSize:13 }}>
+              <option value="">{optional?"Nenhuma":"Selecione..."}</option>
+              {opts.map(o=><option key={o.val} value={o.val}>{o.lbl}</option>)}
+            </select>
+          </div>
+        ))}
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>Quantidade</label>
+          <input type="number" min={1} value={form.qtd} onChange={e=>setForm(p=>({...p,qtd:Number(e.target.value)}))} style={{ width:100, fontSize:13 }} />
+          {matSel && <span style={{ marginLeft:10, fontSize:12, color:"var(--text-secondary)" }}>Disponível: {matSel.qtd} {matSel.unidade}</span>}
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>Observação (opcional)</label>
+          <input value={form.obs} onChange={e=>setForm(p=>({...p,obs:e.target.value}))} placeholder="Observação..." style={{ fontSize:13 }} />
+        </div>
+        {err && <p style={{ fontSize:13, color:"var(--text-danger)", marginBottom:10 }}>{err}</p>}
+        <button onClick={submit} disabled={saving} style={{ fontSize:13, padding:"8px 20px", fontWeight:500 }}>
+          {saving?"Registrando...":`Confirmar ${form.tipo}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Historico({ movs }) {
+  const [filtro, setFiltro] = useState("Todos");
+  const [search, setSearch] = useState("");
+  const filtered = movs.filter(m =>
+    (filtro==="Todos"||m.tipo===filtro) &&
+    [m.materiais?.descricao,m.funcionarios?.nome,m.ordens_servico?.numero].some(v=>(v||"").toLowerCase().includes(search.toLowerCase()))
+  );
+  return (
+    <div>
+      <div style={{ display:"flex", gap:8, marginBottom:"1rem", flexWrap:"wrap" }}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por material, funcionário, OS..." style={{ flex:1, minWidth:180, fontSize:13 }} />
+        {["Todos","Retirada","Devolução"].map(f=>(
+          <button key={f} onClick={()=>setFiltro(f)} style={{ fontSize:13, padding:"6px 12px", fontWeight:filtro===f?500:400, background:filtro===f?"var(--bg-tertiary)":"transparent" }}>{f}</button>
+        ))}
+      </div>
+      <div style={{ background:"var(--bg-primary)", border:"0.5px solid var(--border)", borderRadius:12, overflow:"hidden" }}>
+        {filtered.length===0
+          ? <p style={{ padding:"1.25rem", fontSize:13, color:"var(--text-secondary)" }}>Nenhuma movimentação encontrada.</p>
+          : filtered.map((m,i)=>{
+              const dt = new Date(m.created_at);
+              const dtStr = dt.toLocaleDateString("pt-BR")+" "+dt.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
+              return (
+                <div key={m.id} style={{ padding:"10px 1.25rem", borderTop:i>0?"0.5px solid var(--border)":"none", display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+                  <span style={{ padding:"2px 8px", borderRadius:6, fontSize:11, fontWeight:500, flexShrink:0, background:m.tipo==="Retirada"?"var(--bg-danger)":"var(--bg-success)", color:m.tipo==="Retirada"?"var(--text-danger)":"var(--text-success)" }}>{m.tipo}</span>
+                  <div style={{ flex:1, minWidth:120 }}>
+                    <div style={{ fontSize:14, fontWeight:500 }}>{m.materiais?.descricao||"—"}</div>
+                    <div style={{ fontSize:12, color:"var(--text-secondary)", marginTop:2 }}>{m.funcionarios?.nome||"—"} · OS: {m.ordens_servico?.numero||"—"}{m.obs&&` · ${m.obs}`}</div>
+                  </div>
+                  <div style={{ textAlign:"right", flexShrink:0 }}>
+                    <div style={{ fontSize:13, fontWeight:500 }}>{m.qtd} un</div>
+                    <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{dtStr}</div>
+                  </div>
+                </div>
+              );
+            })
+        }
+      </div>
+      <p style={{ fontSize:12, color:"var(--text-secondary)", marginTop:8 }}>{filtered.length} registro{filtered.length!==1?"s":""}</p>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
